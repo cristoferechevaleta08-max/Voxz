@@ -3,22 +3,33 @@
  * ------------------------------------------------------------
  * Backend único y modular:
  *  1. Sirve el frontend estático (index.html, style.css, script.js, /sounds)
- *  2. Recibe eventos reales de TikTok LIVE con "tiktok-live-connector"
+ *  2. Recibe eventos reales de TikTok LIVE con "tiktok-live-connector" v2
  *  3. Reenvía esos eventos por WebSocket al Dashboard y al Overlay
  *  4. Permite subir sonidos/GIFs propios con Multer (sin límite de cantidad)
  *
  * Sin base de datos: todo el estado "persistente" vive en el navegador
  * (LocalStorage). El servidor solo enruta eventos en tiempo real.
+ *
+ * NOTA IMPORTANTE (léela si algo deja de andar en el futuro):
+ * "tiktok-live-connector" es una librería NO oficial (ingeniería inversa
+ * del chat de TikTok). Cada tanto TikTok cambia cosas internamente y la
+ * librería saca una versión nueva para adaptarse — a veces cambiando
+ * nombres de clases o eventos. Si en el futuro ves errores al conectar,
+ * lo primero es correr `npm update tiktok-live-connector` y revisar
+ * su changelog en https://github.com/zerodytrash/TikTok-Live-Connector
  * ------------------------------------------------------------
  */
 
-const path = require('path');
-const fs = require('fs');
-const express = require('express');
-const cors = require('cors');
-const multer = require('multer');
-const { WebSocketServer } = require('ws');
-const { WebcastPushConnection } = require('tiktok-live-connector');
+import path from 'path';
+import { fileURLToPath } from 'url';
+import fs from 'fs';
+import express from 'express';
+import cors from 'cors';
+import multer from 'multer';
+import { WebSocketServer } from 'ws';
+import { TikTokLiveConnection, WebcastEvent, ControlEvent } from 'tiktok-live-connector';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const PORT = process.env.PORT || 3000;
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
@@ -58,32 +69,38 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
 // ------------------------------------------------------------
 // 2. GESTOR DE SESIONES DE TIKTOK LIVE (una por @usuario)
 // ------------------------------------------------------------
-/** @type {Map<string, WebcastPushConnection>} */
+/** @type {Map<string, TikTokLiveConnection>} */
 const liveSessions = new Map();
 
+// Saca datos de forma segura sin importar si vienen "planos" (data.nickname)
+// o anidados en data.user.nickname (la librería cambia esto entre versiones).
+function pick(data, ...paths) {
+  for (const p of paths) {
+    const val = p.split('.').reduce((o, k) => (o ? o[k] : undefined), data);
+    if (val !== undefined && val !== null) return val;
+  }
+  return undefined;
+}
+
 function normalizeEvent(type, data) {
-  // Traduce los eventos crudos de tiktok-live-connector a un formato
-  // simple y estable que el frontend siempre puede leer igual.
   const base = {
     type,
-    user: data?.nickname || data?.uniqueId || 'Alguien',
-    avatar: data?.profilePictureUrl || '',
-    comment: data?.comment || '',
+    user: pick(data, 'user.nickname', 'nickname', 'user.uniqueId', 'uniqueId') || 'Alguien',
+    avatar: pick(data, 'user.profilePictureUrl', 'profilePictureUrl') || '',
+    comment: pick(data, 'comment') || '',
     coins: 0,
     giftName: '',
     ts: Date.now()
   };
 
   if (type === 'gift') {
-    // repeatEnd indica que terminó una racha de regalos combo
-    base.coins = (data.diamondCount || 0) * (data.repeatCount || 1);
-    base.giftName = data.giftName || 'Regalo';
-    base.repeatEnd = data.repeatEnd !== false;
+    const diamonds = pick(data, 'diamondCount', 'gift.diamond_count', 'giftDetails.diamondCount') || 0;
+    const repeat = pick(data, 'repeatCount', 'gift.repeat_count') || 1;
+    base.coins = diamonds * repeat;
+    base.giftName = pick(data, 'giftName', 'gift.name', 'giftDetails.giftName') || 'Regalo';
+    base.repeatEnd = pick(data, 'repeatEnd') !== false;
   }
-  if (type === 'like') base.coins = data.likeCount || 1;
-  if (type === 'follow') base.coins = 0;
-  if (type === 'share') base.coins = 0;
-  if (type === 'subscribe') base.coins = data.subMonth || 1;
+  if (type === 'like') base.coins = pick(data, 'likeCount') || 1;
 
   return base;
 }
@@ -91,9 +108,12 @@ function normalizeEvent(type, data) {
 function startLiveSession(username, broadcast) {
   if (liveSessions.has(username)) return liveSessions.get(username);
 
-  const connection = new WebcastPushConnection(username, {
-    enableExtendedGiftInfo: true
-  });
+  // Si en tu Web Service de Render agregás la variable de entorno
+  // EULER_API_KEY (gratis en https://www.eulerstream.com), la librería
+  // conecta con límites más altos. Sin ella, igual funciona con el
+  // límite gratuito compartido — suficiente para un canal personal.
+  const options = process.env.EULER_API_KEY ? { signApiKey: process.env.EULER_API_KEY } : {};
+  const connection = new TikTokLiveConnection(username, options);
 
   connection.connect()
     .then(state => {
@@ -105,23 +125,23 @@ function startLiveSession(username, broadcast) {
     });
 
   // Eventos en vivo → normalizados → WebSocket
-  connection.on('chat', d => broadcast(normalizeEvent('comment', d)));
-  connection.on('gift', d => broadcast(normalizeEvent('gift', d)));
-  connection.on('like', d => broadcast(normalizeEvent('like', d)));
-  connection.on('social', d => {
-    // 'social' cubre follow y share según displayType
-    const isShare = (d.label || '').toLowerCase().includes('share');
-    broadcast(normalizeEvent(isShare ? 'share' : 'follow', d));
+  const safeOn = (event, handler) => connection.on(event, (...args) => {
+    try { handler(...args); } catch (e) { console.error(`Error procesando evento ${event}:`, e.message); }
   });
-  connection.on('subscribe', d => broadcast(normalizeEvent('subscribe', d)));
-  connection.on('roomUser', d => broadcast({ type: 'viewers', count: d.viewerCount || 0 }));
-  connection.on('streamEnd', () => {
+
+  safeOn(WebcastEvent.CHAT, d => broadcast(normalizeEvent('comment', d)));
+  safeOn(WebcastEvent.GIFT, d => broadcast(normalizeEvent('gift', d)));
+  safeOn(WebcastEvent.LIKE, d => broadcast(normalizeEvent('like', d)));
+  safeOn(WebcastEvent.FOLLOW, d => broadcast(normalizeEvent('follow', d)));
+  safeOn(WebcastEvent.SHARE, d => broadcast(normalizeEvent('share', d)));
+  safeOn(WebcastEvent.ROOM_USER, d => broadcast({ type: 'viewers', count: pick(d, 'viewerCount') || 0 }));
+  safeOn(WebcastEvent.STREAM_END, () => {
     broadcast({ type: 'status', status: 'ended', username });
     liveSessions.delete(username);
   });
 
   // AUTO-RECONEXIÓN: si se cae, reintenta cada 5s hasta 12 veces (~1 min)
-  connection.on('disconnected', () => {
+  safeOn(ControlEvent.DISCONNECTED, () => {
     broadcast({ type: 'status', status: 'reconnecting', username });
     let attempts = 0;
     const retry = setInterval(() => {

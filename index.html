@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VOXZ by LORD — Tu chat, tu voz, tus reglas</title>
+<meta name="description" content="VOXZ by LORD: alertas, voces y sonidos en vivo para TikTok, 100% en el navegador.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ============================================================
+     VISTA OVERLAY — esto es lo que se pega en OBS como Navegador.
+     Se activa sola cuando la URL trae ?view=overlay
+     ============================================================ -->
+<div id="overlay-root" class="hidden">
+  <div id="overlay-subtitles" class="ov-el" data-el="subtitles"></div>
+  <div id="overlay-alert" class="ov-el ov-alert" data-el="alert">
+    <div class="ov-alert-card">
+      <img id="ov-alert-img" class="ov-alert-img" src="" alt="">
+      <div class="ov-alert-text" id="ov-alert-text"></div>
+    </div>
+  </div>
+  <div id="overlay-edit-badge" class="ov-edit-badge hidden">Modo edición · arrastrá los recuadros</div>
+</div>
+
+<!-- ============================================================
+     DASHBOARD — panel de control de LORD
+     ============================================================ -->
+<div id="dashboard-root">
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">
+        <canvas id="wave-signature" width="40" height="28"></canvas>
+      </div>
+      <div class="brand-text">
+        <h1>VOXZ <span>by LORD</span></h1>
+        <p class="slogan">Tu chat, tu voz, tus reglas</p>
+      </div>
+    </div>
+    <div class="status-pill" id="status-pill">
+      <span class="dot" id="status-dot"></span>
+      <span id="status-label">Desconectado</span>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="conectar">🔌 Conectar</button>
+    <button class="tab" data-tab="voces">🎙️ Voces</button>
+    <button class="tab" data-tab="sonidos">🔊 Sonidos</button>
+    <button class="tab" data-tab="alertas">🚨 Alertas</button>
+  </nav>
+
+  <main class="main-grid">
+
+    <!-- ---------- TAB 1: CONECTAR ---------- -->
+    <section class="tab-panel active" id="panel-conectar">
+      <div class="card hero-card">
+        <h2>Conectá tu TikTok</h2>
+        <p class="muted">Pegá tu usuario y arrancá. Sin instalar nada.</p>
+        <div class="connect-row">
+          <span class="at-prefix">@</span>
+          <input id="input-username" type="text" placeholder="tu.usuario" autocomplete="off">
+          <button id="btn-start" class="btn btn-primary">INICIAR VOXZ</button>
+        </div>
+        <div class="connect-actions">
+          <button id="btn-copy-overlay" class="btn btn-ghost">📋 Copiar link de overlay (para OBS)</button>
+          <button id="btn-stop" class="btn btn-danger-ghost hidden">Detener conexión</button>
+        </div>
+        <p class="hint" id="reconnect-hint"></p>
+      </div>
+
+      <div class="card">
+        <h3>Vista previa en vivo</h3>
+        <p class="muted small">Así se ve tu overlay ahora mismo. Lo que pruebes en "Alertas" aparece acá.</p>
+        <div class="preview-frame">
+          <iframe id="overlay-preview" src="?view=overlay&edit=1" title="Vista previa del overlay"></iframe>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Actividad en vivo</h3>
+        <div id="live-feed" class="live-feed">
+          <p class="muted small">Los eventos de tu LIVE van a aparecer acá apenas inicies VOXZ.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- TAB 2: VOCES ---------- -->
+    <section class="tab-panel" id="panel-voces">
+      <div class="card">
+        <h2>Lector de voz (TTS)</h2>
+        <p class="muted">VOXZ detecta el idioma de cada comentario y lo lee con la voz que elijas.</p>
+
+        <label class="field">
+          <span>Idioma por defecto (cuando no se detecta con certeza)</span>
+          <select id="sel-default-lang"></select>
+        </label>
+
+        <label class="field">
+          <span>Tipo de voz</span>
+          <select id="sel-voice-type">
+            <option value="normal">🧑 Normal</option>
+            <option value="hombre">👨 Hombre</option>
+            <option value="mujer">👩 Mujer</option>
+            <option value="robot">🤖 Robot</option>
+            <option value="nino">🧒 Niño</option>
+            <option value="anciano">👴 Anciano</option>
+            <option value="demonio">👹 Demonio</option>
+            <option value="asmr">🎧 ASMR</option>
+            <option value="locutor">🎙️ Locutor</option>
+            <option value="eco">📢 Eco</option>
+          </select>
+        </label>
+
+        <div class="sliders-grid">
+          <label class="field">
+            <span>Velocidad <b id="val-rate">1.0x</b></span>
+            <input type="range" id="sl-rate" min="0.5" max="2" step="0.05" value="1">
+          </label>
+          <label class="field">
+            <span>Tono <b id="val-pitch">1.0</b></span>
+            <input type="range" id="sl-pitch" min="0" max="2" step="0.05" value="1">
+          </label>
+          <label class="field">
+            <span>Eco <b id="val-echo">0%</b></span>
+            <input type="range" id="sl-echo" min="0" max="100" step="5" value="0">
+          </label>
+          <label class="field">
+            <span>Robotización <b id="val-robot">0%</b></span>
+            <input type="range" id="sl-robot" min="0" max="100" step="5" value="0">
+          </label>
+        </div>
+
+        <div class="connect-row">
+          <input id="input-test-tts" type="text" placeholder="Escribí algo para probar la voz..." value="Gracias por seguirme, esto es VOXZ">
+          <button id="btn-test-voice" class="btn btn-primary">▶ Probar voz</button>
+        </div>
+        <p class="hint" id="voice-count-hint"></p>
+      </div>
+    </section>
+
+    <!-- ---------- TAB 3: SONIDOS ---------- -->
+    <section class="tab-panel" id="panel-sonidos">
+      <div class="card">
+        <h2>Banco de sonidos</h2>
+        <p class="muted">50 sonidos base incluidos + los que subas vos. Sin límite.</p>
+        <div class="upload-row">
+          <label class="btn btn-ghost file-btn">
+            ⬆ Subir sonido (.mp3 / .wav)
+            <input type="file" id="input-upload-sound" accept=".mp3,.wav,.ogg" hidden>
+          </label>
+          <span class="hint" id="upload-hint"></span>
+        </div>
+        <div id="sound-categories"></div>
+      </div>
+    </section>
+
+    <!-- ---------- TAB 4: ALERTAS ---------- -->
+    <section class="tab-panel" id="panel-alertas">
+      <div class="card">
+        <h2>Editor de alertas</h2>
+        <p class="muted">Elegí un evento, personalizalo y probalo antes de salir en vivo.</p>
+        <div class="event-selector" id="event-selector"></div>
+      </div>
+
+      <div class="card" id="alert-editor-card">
+        <!-- Se llena dinámicamente por script.js según el evento elegido -->
+      </div>
+
+      <div class="card">
+        <h3>Temas del overlay</h3>
+        <div class="theme-grid" id="theme-grid"></div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="footer">
+    <p>VOXZ by LORD — hecho para que streamear sea más fácil, no más complicado.</p>
+  </footer>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>

@@ -512,7 +512,27 @@ function initDashboard(){
     connectWS(APP.config.username, onDashboardEvent);
     setStatus('connecting');
     $('#btn-stop').classList.remove('hidden');
+    // BUGFIX: la vista previa (iframe) también necesita reconectarse con el
+    // usuario guardado al recargar la página — si no, "Simular" queda mudo
+    // porque el iframe nunca se suscribió a nada.
+    $('#overlay-preview').src = `?view=overlay&edit=1&u=${APP.config.username}`;
   }
+}
+
+/**
+ * BUGFIX audio: los navegadores bloquean la voz automática (TTS) hasta que
+ * haya al menos un click real del usuario en la página. Como "INICIAR VOXZ"
+ * SÍ es un click real, aprovechamos ese momento para "destrabar" el motor
+ * de voz con una lectura silenciosa. Después de esto, la lectura automática
+ * de comentarios que llegan solos por WebSocket ya no queda muda.
+ */
+function unlockAudio(){
+  if(!('speechSynthesis' in window)) return;
+  try{
+    const u = new SpeechSynthesisUtterance(' ');
+    u.volume = 0;
+    speechSynthesis.speak(u);
+  }catch(e){}
 }
 
 function onDashboardEvent(msg){
@@ -551,6 +571,7 @@ function setupConnect(){
   $('#btn-start').addEventListener('click', ()=>{
     const username = $('#input-username').value.replace('@','').trim().toLowerCase();
     if(!username){ $('#reconnect-hint').textContent = 'Escribí tu @usuario de TikTok primero.'; return; }
+    unlockAudio(); // desbloquea la voz automática usando este click como permiso
     APP.config.username = username;
     saveConfig(APP.config);
     setStatus('connecting');

@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VOXZ by LORD — Tu chat, tu voz, tus reglas</title>
-<meta name="description" content="VOXZ by LORD: alertas, voces y sonidos en vivo para TikTok, 100% en el navegador.">
+<title>VOXZ — Tu chat, tu voz, tus reglas</title>
+<meta name="description" content="VOXZ: alertas, voces y sonidos en vivo para TikTok LIVE. Chatbot con lector de voz para streamers.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@600;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
@@ -27,7 +27,7 @@
 </div>
 
 <!-- ============================================================
-     DASHBOARD — panel de control de LORD
+     DASHBOARD — panel de control de VOXZ
      ============================================================ -->
 <div id="dashboard-root">
 
@@ -37,7 +37,7 @@
         <canvas id="wave-signature" width="40" height="28"></canvas>
       </div>
       <div class="brand-text">
-        <h1>VOXZ <span>by LORD</span></h1>
+        <h1>VOXZ</h1>
         <p class="slogan">Tu chat, tu voz, tus reglas</p>
       </div>
     </div>
@@ -141,6 +141,37 @@
         </div>
         <p class="hint" id="voice-count-hint"></p>
       </div>
+
+      <div class="card">
+        <h2>Voz IA <span class="ai-badge">ElevenLabs</span></h2>
+        <p class="muted">Reemplazá la voz del navegador por voces realistas generadas por IA. Necesita una API key de ElevenLabs configurada en el servidor.</p>
+
+        <div class="switch-row">
+          <div>
+            <div class="switch-label">Usar voz IA</div>
+            <div class="switch-desc">Si se apaga o falla, VOXZ vuelve automáticamente a la voz del navegador.</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="chk-ai-voice">
+            <span class="switch-track"></span>
+          </label>
+        </div>
+        <p class="ai-status" id="ai-voice-status"></p>
+
+        <div id="ai-voice-options" class="hidden">
+          <label class="field">
+            <span>Voz de ElevenLabs</span>
+            <select id="sel-ai-voice"></select>
+          </label>
+          <label class="field">
+            <span>¿Dónde se usa?</span>
+            <select id="sel-ai-mode">
+              <option value="alerts">Solo en alertas (regalos, subs, seguidores...) — recomendado, gasta menos</option>
+              <option value="all">En todo el chat leído</option>
+            </select>
+          </label>
+        </div>
+      </div>
     </section>
 
     <!-- ---------- TAB 3: SONIDOS ---------- -->
@@ -180,7 +211,7 @@
   </main>
 
   <footer class="footer">
-    <p>VOXZ by LORD — hecho para que streamear sea más fácil, no más complicado.</p>
+    <p><b>VOXZ</b> — hecho para que streamear sea más fácil, no más complicado.</p>
   </footer>
 </div>
 

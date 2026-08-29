@@ -1,6 +1,6 @@
 'use strict';
 /**
- * VOXZ by LORD — script.js
+ * VOXZ — script.js
  * ------------------------------------------------------------
  * Un solo archivo que maneja DOS vistas de la misma página:
  *   - Dashboard (panel de control)     → index.html normal
@@ -69,8 +69,8 @@ const ANIM_LABELS = {pop:'Pop',slide:'Slide',fuego:'🔥 Fuego',rayo:'⚡ Rayo',
   bounce:'Rebote',zoom:'Zoom',flip:'Flip 3D',glitch:'Glitch',confetti:'🎉 Confetti'};
 
 const THEMES = [
-  ['neon-cyber','Neón Cyber'],['minimal','Minimal'],['gamer-rgb','Gamer RGB'],['samurai','Samurái'],
-  ['matrix','Matrix'],['fuego','Fuego'],['hielo','Hielo'],['pro-dark','Pro Dark'],
+  ['voxz-rojo','⚡ VOXZ Rojo'],['neon-cyber','Neón Cyber'],['minimal','Minimal'],['gamer-rgb','Gamer RGB'],
+  ['samurai','Samurái'],['matrix','Matrix'],['fuego','Fuego'],['hielo','Hielo'],['pro-dark','Pro Dark'],
   ['transparente','Transparente'],['pastel','Pastel']
 ];
 
@@ -106,8 +106,9 @@ function defaultConfig(){
   });
   return {
     username:'',
-    theme:'neon-cyber',
+    theme:'voxz-rojo',
     voice:{ defaultLang:'es-ES', voiceType:'normal', rate:1, pitch:1, echo:0, robot:0, readComments:true },
+    aiVoice:{ enabled:false, voiceId:'', mode:'alerts' }, // mode: 'alerts' (solo eventos) o 'all' (todo el chat)
     sounds:{ custom:[] }, // {id,url,name,category}
     overlay:{ subtitlePos:{x:50,y:88}, alertPos:{x:50,y:22} },
     metaGoal: 5000,
@@ -125,6 +126,7 @@ function loadConfig(){
     // merge superficial por si se agregan campos nuevos en el futuro
     return Object.assign(defaultConfig(), parsed, {
       voice:Object.assign(defaultConfig().voice, parsed.voice||{}),
+      aiVoice:Object.assign(defaultConfig().aiVoice, parsed.aiVoice||{}),
       overlay:Object.assign(defaultConfig().overlay, parsed.overlay||{}),
       alerts:Object.assign(defaultConfig().alerts, parsed.alerts||{})
     });
@@ -202,6 +204,79 @@ function detectLanguage(text){
 // ============================================================
 // 5. TEXT-TO-SPEECH
 // ============================================================
+
+// ---------- Voz IA (ElevenLabs, vía proxy del backend) ----------
+// El navegador NUNCA ve la API key: script.js le pide el audio a
+// server.js (/api/tts) y server.js es quien llama a ElevenLabs con
+// la key guardada como variable de entorno. Si no hay key configurada,
+// /api/tts/status devuelve enabled:false y VOXZ usa la voz del
+// navegador automáticamente — la app funciona igual sin IA.
+const AI = { available:false, checked:false, voices:[] };
+
+async function checkAIVoiceStatus(){
+  try{
+    const r = await fetch('/api/tts/status');
+    const d = await r.json();
+    AI.available = !!d.enabled;
+  }catch(e){ AI.available = false; }
+  AI.checked = true;
+  return AI.available;
+}
+
+async function loadAIVoices(){
+  if(!AI.available) return [];
+  try{
+    const r = await fetch('/api/tts/voices');
+    const d = await r.json();
+    AI.voices = Array.isArray(d.voices) ? d.voices : [];
+  }catch(e){ AI.voices = []; }
+  return AI.voices;
+}
+
+// Reproduce un mp3 devuelto por /api/tts. Devuelve una Promise que
+// resuelve cuando termina de sonar (o si falla, para poder hacer fallback).
+function playAIAudio(text, voiceId){
+  return new Promise((resolve, reject)=>{
+    fetch('/api/tts', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ text, voiceId })
+    }).then(r=>{
+      if(!r.ok) throw new Error('tts_failed');
+      return r.blob();
+    }).then(blob=>{
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.onplay = ()=>setSpeaking(true);
+      audio.onended = ()=>{ setSpeaking(false); URL.revokeObjectURL(url); resolve(); };
+      audio.onerror = ()=>{ setSpeaking(false); URL.revokeObjectURL(url); reject(new Error('audio_error')); };
+      audio.play().catch(reject);
+    }).catch(reject);
+  });
+}
+
+/**
+ * Decide si este texto se lee con voz IA (ElevenLabs) o con la voz del
+ * navegador, según el switch de la pestaña Voces y si es un evento
+ * (regalo, sub, etc.) o un comentario normal del chat.
+ * isEvent=true -> alertas/eventos. isEvent=false -> lectura de comentarios.
+ */
+function speakText(text, opts={}){
+  if(!text) return;
+  const av = APP.config.aiVoice;
+  const shouldUseAI = av && av.enabled && av.voiceId && AI.available &&
+    (av.mode === 'all' || opts.isEvent);
+
+  if(shouldUseAI){
+    playAIAudio(text, av.voiceId).catch(()=>{
+      // Si ElevenLabs falla (sin crédito, sin conexión, etc.) cae a la voz del navegador.
+      speakTextBrowser(text, opts);
+    });
+  } else {
+    speakTextBrowser(text, opts);
+  }
+}
+
 let cachedVoices = [];
 function refreshVoices(){ cachedVoices = ('speechSynthesis' in window) ? speechSynthesis.getVoices() : []; }
 if('speechSynthesis' in window){
@@ -227,7 +302,7 @@ function setSpeaking(on){
  * así que "Robot" y "Eco" son APROXIMACIONES logradas con tono/velocidad
  * y repetición del texto — no un efecto DSP real.
  */
-function speakText(text, opts={}){
+function speakTextBrowser(text, opts={}){
   if(!text || !('speechSynthesis' in window)) return;
   const v = APP.config.voice;
   const lang = opts.lang && opts.lang!=='auto' ? opts.lang : (detectLanguage(text) || v.defaultLang);
@@ -371,7 +446,7 @@ function playAlert(ev, design){
     box.style.opacity = '1';
 
     if(design.soundId) playSoundById(design.soundId);
-    speakText(text, { lang:design.voiceLang, type:design.voiceType });
+    speakText(text, { lang:design.voiceLang, type:design.voiceType, isEvent:true });
 
     setTimeout(()=>{
       box.style.opacity = '0';
@@ -624,7 +699,7 @@ function setupVoices(){
 
   $('#btn-test-voice').addEventListener('click', ()=>{
     const text = $('#input-test-tts').value || 'Hola, esto es una prueba de VOXZ';
-    speakText(text, {});
+    speakText(text, { isEvent:true }); // "isEvent" para que la prueba use IA si está activada
   });
 
   const updateHint = ()=>{
@@ -635,6 +710,56 @@ function setupVoices(){
   };
   updateHint();
   if('speechSynthesis' in window) speechSynthesis.onvoiceschanged = ()=>{ refreshVoices(); updateHint(); };
+
+  setupAIVoice();
+}
+
+// ---------- Voz IA (ElevenLabs) dentro de la pestaña Voces ----------
+async function setupAIVoice(){
+  const toggle = $('#chk-ai-voice');
+  const wrap = $('#ai-voice-options');
+  const sel = $('#sel-ai-voice');
+  const modeSel = $('#sel-ai-mode');
+  const statusEl = $('#ai-voice-status');
+
+  statusEl.textContent = 'Consultando el servidor...';
+  statusEl.className = 'ai-status';
+  await checkAIVoiceStatus();
+
+  if(!AI.available){
+    toggle.checked = false;
+    toggle.disabled = true;
+    wrap.classList.add('hidden');
+    statusEl.className = 'ai-status off';
+    statusEl.innerHTML = 'Sin conectar. VOXZ está usando la voz del navegador. Para activar voces IA con ElevenLabs, configurá <code>ELEVENLABS_API_KEY</code> en el servidor (ver README).';
+    return;
+  }
+
+  statusEl.className = 'ai-status ok';
+  statusEl.textContent = '✅ ElevenLabs conectado.';
+  toggle.disabled = false;
+  toggle.checked = !!APP.config.aiVoice.enabled;
+  wrap.classList.toggle('hidden', !toggle.checked);
+  modeSel.value = APP.config.aiVoice.mode || 'alerts';
+
+  const voices = await loadAIVoices();
+  sel.innerHTML = voices.length
+    ? voices.map(v=>`<option value="${v.voice_id}">${v.name}</option>`).join('')
+    : '<option value="">No se encontraron voces en tu cuenta de ElevenLabs</option>';
+  if(APP.config.aiVoice.voiceId && voices.some(v=>v.voice_id === APP.config.aiVoice.voiceId)){
+    sel.value = APP.config.aiVoice.voiceId;
+  } else if(voices[0]){
+    APP.config.aiVoice.voiceId = voices[0].voice_id;
+    saveConfig(APP.config);
+  }
+
+  toggle.addEventListener('change', ()=>{
+    APP.config.aiVoice.enabled = toggle.checked;
+    wrap.classList.toggle('hidden', !toggle.checked);
+    saveConfig(APP.config);
+  });
+  sel.addEventListener('change', ()=>{ APP.config.aiVoice.voiceId = sel.value; saveConfig(APP.config); });
+  modeSel.addEventListener('change', ()=>{ APP.config.aiVoice.mode = modeSel.value; saveConfig(APP.config); });
 }
 
 function updateSliderLabels(){
@@ -869,7 +994,7 @@ function wireAlertEditorEvents(ev, cfg){
 
   $('#btn-simulate').addEventListener('click', ()=>{
     const coins = ev.hasLevels ? Number($('#simulate-coins')?.value || 0) : 0;
-    const fakeEvent = { type: ev.id, user:'LORD_test', coins, giftName:'Corona', comment:'', simulated:true };
+    const fakeEvent = { type: ev.id, user:'VOXZ_test', coins, giftName:'Corona', comment:'', simulated:true };
     handleLiveEvent(fakeEvent); // se ve en el preview del propio dashboard (mismo storage)
     // y además lo mandamos al overlay real si está conectado
     sendTestEvent(fakeEvent);
@@ -901,7 +1026,7 @@ function animateWaveform(){
     const active = APP.speakingIndicator || (window.speechSynthesis && speechSynthesis.speaking);
     for(let i=0;i<bars;i++){
       const h = active ? 6 + Math.random()*20 : 4 + Math.sin(Date.now()/400 + i)*2 + 4;
-      ctx.fillStyle = active ? '#00E5FF' : 'rgba(255,255,255,.5)';
+      ctx.fillStyle = active ? '#FF1F3D' : 'rgba(255,255,255,.5)';
       ctx.fillRect(i*8+2, (canvas.height-h)/2, 5, h);
     }
     requestAnimationFrame(draw);

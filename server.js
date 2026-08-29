@@ -1,11 +1,14 @@
 /**
- * VOXZ by LORD — server.js
+ * VOXZ — server.js
  * ------------------------------------------------------------
  * Backend único y modular:
  *  1. Sirve el frontend estático (index.html, style.css, script.js, /sounds)
  *  2. Recibe eventos reales de TikTok LIVE con "tiktok-live-connector" v2
  *  3. Reenvía esos eventos por WebSocket al Dashboard y al Overlay
  *  4. Permite subir sonidos/GIFs propios con Multer (sin límite de cantidad)
+ *  5. Actúa como proxy de voz IA (ElevenLabs) — la API key vive SOLO acá,
+ *     nunca se manda al navegador. Si no hay key configurada, VOXZ sigue
+ *     funcionando 100% con la voz del navegador (Web Speech API).
  *
  * Sin base de datos: todo el estado "persistente" vive en el navegador
  * (LocalStorage). El servidor solo enruta eventos en tiempo real.
@@ -20,6 +23,7 @@
  * ------------------------------------------------------------
  */
 
+import 'dotenv/config';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
@@ -64,6 +68,73 @@ const upload = multer({
 app.post('/api/upload', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ ok: false, error: 'No se recibió archivo' });
   res.json({ ok: true, url: `/uploads/${req.file.filename}`, name: req.file.originalname });
+});
+
+// ------------------------------------------------------------
+// 1b. VOZ IA — proxy a ElevenLabs
+// ------------------------------------------------------------
+// La key nunca se expone al navegador. Se configura como variable de
+// entorno ELEVENLABS_API_KEY (local: archivo .env — ver .env.example;
+// en Render: Settings → Environment). Sin key, estos endpoints avisan
+// que la función está apagada y el frontend usa la voz del navegador.
+const ELEVEN_KEY = process.env.ELEVENLABS_API_KEY || '';
+const ELEVEN_BASE = 'https://api.elevenlabs.io/v1';
+
+app.get('/api/tts/status', (req, res) => {
+  res.json({ enabled: !!ELEVEN_KEY });
+});
+
+// Cachea la lista de voces 10 minutos para no golpear la cuota de ElevenLabs
+// en cada carga del dashboard.
+let voicesCache = { at: 0, data: [] };
+app.get('/api/tts/voices', async (req, res) => {
+  if (!ELEVEN_KEY) return res.status(400).json({ ok: false, error: 'Voz IA no configurada' });
+  if (Date.now() - voicesCache.at < 10 * 60 * 1000 && voicesCache.data.length) {
+    return res.json({ ok: true, voices: voicesCache.data });
+  }
+  try {
+    const r = await fetch(`${ELEVEN_BASE}/voices`, { headers: { 'xi-api-key': ELEVEN_KEY } });
+    if (!r.ok) throw new Error(`ElevenLabs respondió ${r.status}`);
+    const data = await r.json();
+    const voices = (data.voices || []).map(v => ({ voice_id: v.voice_id, name: v.name }));
+    voicesCache = { at: Date.now(), data: voices };
+    res.json({ ok: true, voices });
+  } catch (err) {
+    res.status(502).json({ ok: false, error: err.message || 'No se pudo consultar ElevenLabs' });
+  }
+});
+
+app.post('/api/tts', async (req, res) => {
+  if (!ELEVEN_KEY) return res.status(400).json({ ok: false, error: 'Voz IA no configurada' });
+  const { text, voiceId } = req.body || {};
+  if (!text || !voiceId) return res.status(400).json({ ok: false, error: 'Falta texto o voz' });
+  // Recorte de seguridad: un comentario de chat no debería superar esto,
+  // y evita gastar cuota de golpe con un texto gigante.
+  const safeText = String(text).slice(0, 500);
+  try {
+    const r = await fetch(`${ELEVEN_BASE}/text-to-speech/${encodeURIComponent(voiceId)}`, {
+      method: 'POST',
+      headers: {
+        'xi-api-key': ELEVEN_KEY,
+        'Content-Type': 'application/json',
+        'Accept': 'audio/mpeg'
+      },
+      body: JSON.stringify({
+        text: safeText,
+        model_id: 'eleven_multilingual_v2',
+        voice_settings: { stability: 0.5, similarity_boost: 0.75 }
+      })
+    });
+    if (!r.ok) {
+      const errText = await r.text().catch(() => '');
+      throw new Error(`ElevenLabs respondió ${r.status}: ${errText.slice(0, 200)}`);
+    }
+    res.setHeader('Content-Type', 'audio/mpeg');
+    const buffer = Buffer.from(await r.arrayBuffer());
+    res.send(buffer);
+  } catch (err) {
+    res.status(502).json({ ok: false, error: err.message || 'Fallo al generar audio' });
+  }
 });
 
 // ------------------------------------------------------------
@@ -174,7 +245,8 @@ function stopLiveSession(username) {
 // 3. SERVIDOR HTTP + WEBSOCKET
 // ------------------------------------------------------------
 const server = app.listen(PORT, () => {
-  console.log(`✅ VOXZ by LORD escuchando en http://localhost:${PORT}`);
+  console.log(`✅ VOXZ escuchando en http://localhost:${PORT}`);
+  console.log(ELEVEN_KEY ? '🎙️  Voz IA (ElevenLabs): activada' : '🎙️  Voz IA (ElevenLabs): apagada (sin ELEVENLABS_API_KEY) — usando voz del navegador');
 });
 
 const wss = new WebSocketServer({ server, path: '/ws' });
